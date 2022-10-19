@@ -5,19 +5,15 @@ option go_package = "github.com/gochittychat/proto/goChittyChat;goChittyChat";
 package goChittyChat;
 
 service ChatService {
-  rpc Connect(ConPost) returns (stream Post) {}
+  rpc Connect(Post) returns (stream Post) {}
   rpc Disconnect(Post) returns (Empty) {}
-  rpc Messages(stream Post) returns (Empty) {}
-}
-
-message ConPost {
-  string username = 1;
-  string lobby = 2;
+  rpc Messages(stream Post) returns (Post) {}
 }
 
 message Post {
   int32 id = 1;
   string message = 2;
+  int64 lamport = 3;
 }
 
 message Empty {}

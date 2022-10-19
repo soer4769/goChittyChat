@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ChatServiceClient interface {
-	Connect(ctx context.Context, in *ConPost, opts ...grpc.CallOption) (ChatService_ConnectClient, error)
+	Connect(ctx context.Context, in *Post, opts ...grpc.CallOption) (ChatService_ConnectClient, error)
 	Disconnect(ctx context.Context, in *Post, opts ...grpc.CallOption) (*Empty, error)
 	Messages(ctx context.Context, opts ...grpc.CallOption) (ChatService_MessagesClient, error)
 }
@@ -35,7 +35,7 @@ func NewChatServiceClient(cc grpc.ClientConnInterface) ChatServiceClient {
 	return &chatServiceClient{cc}
 }
 
-func (c *chatServiceClient) Connect(ctx context.Context, in *ConPost, opts ...grpc.CallOption) (ChatService_ConnectClient, error) {
+func (c *chatServiceClient) Connect(ctx context.Context, in *Post, opts ...grpc.CallOption) (ChatService_ConnectClient, error) {
 	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[0], "/goChittyChat.ChatService/Connect", opts...)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (c *chatServiceClient) Messages(ctx context.Context, opts ...grpc.CallOptio
 
 type ChatService_MessagesClient interface {
 	Send(*Post) error
-	CloseAndRecv() (*Empty, error)
+	CloseAndRecv() (*Post, error)
 	grpc.ClientStream
 }
 
@@ -99,11 +99,11 @@ func (x *chatServiceMessagesClient) Send(m *Post) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *chatServiceMessagesClient) CloseAndRecv() (*Empty, error) {
+func (x *chatServiceMessagesClient) CloseAndRecv() (*Post, error) {
 	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
-	m := new(Empty)
+	m := new(Post)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (x *chatServiceMessagesClient) CloseAndRecv() (*Empty, error) {
 // All implementations must embed UnimplementedChatServiceServer
 // for forward compatibility
 type ChatServiceServer interface {
-	Connect(*ConPost, ChatService_ConnectServer) error
+	Connect(*Post, ChatService_ConnectServer) error
 	Disconnect(context.Context, *Post) (*Empty, error)
 	Messages(ChatService_MessagesServer) error
 	mustEmbedUnimplementedChatServiceServer()
@@ -124,7 +124,7 @@ type ChatServiceServer interface {
 type UnimplementedChatServiceServer struct {
 }
 
-func (UnimplementedChatServiceServer) Connect(*ConPost, ChatService_ConnectServer) error {
+func (UnimplementedChatServiceServer) Connect(*Post, ChatService_ConnectServer) error {
 	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
 }
 func (UnimplementedChatServiceServer) Disconnect(context.Context, *Post) (*Empty, error) {
@@ -147,7 +147,7 @@ func RegisterChatServiceServer(s grpc.ServiceRegistrar, srv ChatServiceServer) {
 }
 
 func _ChatService_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ConPost)
+	m := new(Post)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func _ChatService_Messages_Handler(srv interface{}, stream grpc.ServerStream) er
 }
 
 type ChatService_MessagesServer interface {
-	SendAndClose(*Empty) error
+	SendAndClose(*Post) error
 	Recv() (*Post, error)
 	grpc.ServerStream
 }
@@ -199,7 +199,7 @@ type chatServiceMessagesServer struct {
 	grpc.ServerStream
 }
 
-func (x *chatServiceMessagesServer) SendAndClose(m *Empty) error {
+func (x *chatServiceMessagesServer) SendAndClose(m *Post) error {
 	return x.ServerStream.SendMsg(m)
 }
 

@@ -12,11 +12,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-var userId int32
-
 type user struct {
     id int32
-    username string
     lobby string
     chanCom chan goChittyChat.Post
     chanDone chan bool
@@ -27,56 +24,40 @@ type server struct {
     users []*user
 }
 
-func (s *server) FindUser(id int32) *user {
-    for _, u := range s.users {
-        if u.id == id {
-            return u
-        }
-    }
-    return nil
-}
-
-func (s *server) RemoveUser(id int32) {
+func (s *server) Broadcast(msg *goChittyChat.Post) {
     for i, u := range s.users {
-        if u.id == id {
-            s.users = append(s.users[:i], s.users[i+1:]...)
-            return
-        }
-    }
-}
-
-func (s *server) BroadcastPost(usr *user, msg *goChittyChat.Post) {
-    for _, u := range s.users {
-        if u != usr  && u.lobby == usr.lobby {
+        if int32(i) != msg.Id && u != nil && u.lobby == s.users[msg.Id].lobby {
             u.chanCom <- *msg
         }
     }
 }
 
-func (s *server) Connect(in *goChittyChat.ConPost, srv goChittyChat.ChatService_ConnectServer) error {
-    userId++
-    userData := user{userId, in.Username, "default", make(chan goChittyChat.Post), make(chan bool)}
+func (s *server) Connect(in *goChittyChat.Post, srv goChittyChat.ChatService_ConnectServer) error {
+    userData := user{int32(len(s.users)), "default", make(chan goChittyChat.Post), make(chan bool)}
+    userMsg := fmt.Sprintf("Participant %v joined Chitty-Chat at Lamport time #L#", userData.id)
     s.users = append(s.users, &userData)
 
-    s.BroadcastPost(&userData, &goChittyChat.Post{Id: userData.id, Message: fmt.Sprintf("client %v (%v) connected to server...", userData.id, userData.username)})
-    srv.Send(&goChittyChat.Post{Id: userData.id, Message: "Server connection established..."})
-    log.Printf("Client %v (%v) connected to server...", userData.id, userData.username)
+    s.Broadcast(&goChittyChat.Post{Id: userData.id, Lamport: in.Lamport, Message: userMsg})
+    srv.Send(&goChittyChat.Post{Id: userData.id, Lamport: in.Lamport, Message: userMsg})
+    srv.Send(&goChittyChat.Post{Message: "================================\n                        Welcome to Chitty Chat!\n                   \n                     Commands:\n                     --help            Display Help\n                     --exit            Leave Server\n                     --change-lobby X  Change Lobby\n                    ================================"})
 
     for {
         select {
             case m := <-userData.chanCom:
                 srv.Send(&m)
             case <-userData.chanDone:
-                s.RemoveUser(userData.id)
+                s.users[userData.id] = nil
                 return nil
         }
     }
 }
 
 func (s *server) Disconnect(context context.Context, in *goChittyChat.Post) (out *goChittyChat.Empty, err error) {
-    usr := s.FindUser(in.Id)
-    log.Printf("client %v (%v) disconnected...", usr.id, usr.username)
-    s.BroadcastPost(usr, &goChittyChat.Post{Id: usr.id, Message: fmt.Sprintf("client %v (%v) disconnected...", usr.id, usr.username)})
+    usr := s.users[in.Id]
+    msg := fmt.Sprintf("Participant %v left Chitty-Chat at Lamport time #L#", usr.id)
+
+    log.Printf("Client %v disconnected from the server...", usr.id)
+    s.Broadcast(&goChittyChat.Post{Id: usr.id, Lamport: in.Lamport, Message: msg})
     usr.chanDone <- true
     return &goChittyChat.Empty{}, nil
 }
@@ -90,26 +71,31 @@ func (s *server) Messages(srv goChittyChat.ChatService_MessagesServer) error {
         }
 
         if err != nil {
-            log.Fatalf("ERROR: Cannot receive %v", err)
+            log.Fatalf("Failed to receive %v", err)
             return nil
         }
 
-        if resp.Message == "exit" {
+        if resp.Message == "--exit" {
             return nil
         }
 
-        usr := s.FindUser(resp.Id)
+        usr := s.users[resp.Id]
+
+	    if resp.Message == "--help" {
+	        usr.chanCom <-goChittyChat.Post{Message: "================================\n                     Commands:\n                     --help            Display Help\n                     --exit            Leave Server\n                     --change-lobby X  Change Lobby\n                    ================================"}
+	        continue
+	    }
 
         if strings.Contains(resp.Message,"--change-lobby ") {
-            log.Printf("Client %v (%v) changed lobby from '%v' to %v", resp.Id, usr.username, usr.lobby, resp.Message[15:])
-            s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("client %v (%v) changed lobby to %v", usr.username, resp.Id, resp.Message[15:])})
+            log.Printf("Client %v changed lobby from '%v' to '%v'", resp.Id, usr.lobby, resp.Message[15:])
+            s.Broadcast(&goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("Participant %v changed lobby to %v", resp.Id, resp.Message[15:])})
             usr.lobby = resp.Message[15:]
-            s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("client %v (%v) joined the lobby...", usr.username, resp.Id)})
+            s.Broadcast(&goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("Participant %v joined the lobby...", resp.Id)})
             continue
         }
 
-        log.Printf("Client %v (%v) sent message: %v\n", resp.Id, usr.username, resp.Message)
-        s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("%v (%v): %v", usr.username, resp.Id, resp.Message)})
+        log.Printf("Client %v wrote the message: %v", resp.Id, resp.Message)
+        s.Broadcast(&goChittyChat.Post{Id: resp.Id, Lamport: resp.Lamport, Message: fmt.Sprintf("Participant %v wrote at Lamport time #L#: %v", resp.Id, resp.Message)})
     }
 }
 
@@ -117,7 +103,7 @@ func main() {
     // create listener
     lis, err := net.Listen("tcp", "localhost:50005")
     if err != nil {
-        log.Fatalf("ERROR: Failed to listen: %v", err)
+        log.Fatalf("Failed to listen: %v", err)
     }
 
     // create grpc server
@@ -127,6 +113,6 @@ func main() {
 
     // launch server
     if err := s.Serve(lis); err != nil {
-        log.Fatalf("ERROR: Failed to serve: %v", err)
+        log.Fatalf("Failed to serve: %v", err)
     }
 }
