@@ -1,4 +1,4 @@
-module github.com/gonetwork
+module github.com/gochittychat
 
 go 1.18
 

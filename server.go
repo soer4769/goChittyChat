@@ -4,64 +4,129 @@ import (
     "context"
     "log"
     "net"
-    "time"
-    "math/rand"
+    "io"
+    "fmt"
+    "strings"
 
-	"github.com/gonetwork/proto"
+	"github.com/gochittychat/proto"
 	"google.golang.org/grpc"
 )
 
-type Flags struct {
-    SYN, ACK, FIN bool
-}
+var userId int32
 
-type Pack struct {
-    SeqNum, AckNum uint32
-    Message string
-    Status Flags
+type user struct {
+    id int32
+    username string
+    lobby string
+    chanCom chan goChittyChat.Post
+    chanDone chan bool
 }
 
 type server struct {
-	TCPHandshake.UnimplementedHandshakeServer
+    goChittyChat.UnimplementedChatServiceServer
+    users []*user
 }
 
-func (s *server) ConnSend(ctx context.Context, in *TCPHandshake.TCPPack) (*TCPHandshake.TCPPack, error) {
-    if in.Status.SYN {
-        log.Printf("New client trying to establish simulated TCP connection...")
-        log.Printf("Recieved message from client:\n\t%+v\n", in)
-
-        ack := Pack{SeqNum: rand.Uint32(), AckNum: in.SeqNum+1, Message: "SYN+ACK", Status: Flags{SYN: true, ACK: true}}
-        log.Printf("Sending response to client:\n\t%+v\n", ack)
-
-        return &TCPHandshake.TCPPack{
-                 SeqNum: ack.SeqNum,
-                 AckNum: ack.AckNum,
-                 Message: ack.Message,
-                 Status: &TCPHandshake.Flags{
-                   SYN: ack.Status.SYN,
-                   ACK: ack.Status.ACK,
-                 },
-               }, nil
+func (s *server) FindUser(id int32) *user {
+    for _, u := range s.users {
+        if u.id == id {
+            return u
+        }
     }
+    return nil
+}
 
-    if in.Status.ACK {
-        log.Printf("Established simulated TCP connection succefully with client...")
+func (s *server) RemoveUser(id int32) {
+    for i, u := range s.users {
+        if u.id == id {
+            s.users = append(s.users[:i], s.users[i+1:]...)
+            return
+        }
     }
+}
 
-    return &TCPHandshake.TCPPack{}, nil
+func (s *server) BroadcastPost(usr *user, msg *goChittyChat.Post) {
+    for _, u := range s.users {
+        if u != usr  && u.lobby == usr.lobby {
+            u.chanCom <- *msg
+        }
+    }
+}
+
+func (s *server) Connect(in *goChittyChat.ConPost, srv goChittyChat.ChatService_ConnectServer) error {
+    userId++
+    userData := user{userId, in.Username, "default", make(chan goChittyChat.Post), make(chan bool)}
+    s.users = append(s.users, &userData)
+
+    s.BroadcastPost(&userData, &goChittyChat.Post{Id: userData.id, Message: fmt.Sprintf("client %v (%v) connected to server...", userData.id, userData.username)})
+    srv.Send(&goChittyChat.Post{Id: userData.id, Message: "Server connection established..."})
+    log.Printf("Client %v (%v) connected to server...", userData.id, userData.username)
+
+    for {
+        select {
+            case m := <-userData.chanCom:
+                srv.Send(&m)
+            case <-userData.chanDone:
+                s.RemoveUser(userData.id)
+                return nil
+        }
+    }
+}
+
+func (s *server) Disconnect(context context.Context, in *goChittyChat.Post) (out *goChittyChat.Empty, err error) {
+    usr := s.FindUser(in.Id)
+    log.Printf("client %v (%v) disconnected...", usr.id, usr.username)
+    s.BroadcastPost(usr, &goChittyChat.Post{Id: usr.id, Message: fmt.Sprintf("client %v (%v) disconnected...", usr.id, usr.username)})
+    usr.chanDone <- true
+    return &goChittyChat.Empty{}, nil
+}
+
+func (s *server) Messages(srv goChittyChat.ChatService_MessagesServer) error {
+    for {
+        resp, err := srv.Recv()
+
+        if err == io.EOF {
+            return nil
+        }
+
+        if err != nil {
+            log.Fatalf("ERROR: Cannot receive %v", err)
+            return nil
+        }
+
+        if resp.Message == "exit" {
+            return nil
+        }
+
+        usr := s.FindUser(resp.Id)
+
+        if strings.Contains(resp.Message,"--change-lobby ") {
+            log.Printf("Client %v (%v) changed lobby from '%v' to %v", resp.Id, usr.username, usr.lobby, resp.Message[15:])
+            s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("client %v (%v) changed lobby to %v", usr.username, resp.Id, resp.Message[15:])})
+            usr.lobby = resp.Message[15:]
+            s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("client %v (%v) joined the lobby...", usr.username, resp.Id)})
+            continue
+        }
+
+        log.Printf("Client %v (%v) sent message: %v\n", resp.Id, usr.username, resp.Message)
+        s.BroadcastPost(usr, &goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("%v (%v): %v", usr.username, resp.Id, resp.Message)})
+    }
 }
 
 func main() {
-    rand.Seed(time.Now().UnixNano())
-    lis, err := net.Listen("tcp", ":50051")
+    // create listener
+    lis, err := net.Listen("tcp", "localhost:50005")
     if err != nil {
-        log.Fatalf("failed to listen: %v", err)
+        log.Fatalf("ERROR: Failed to listen: %v", err)
     }
-    s := grpc.NewServer()
 
-	TCPHandshake.RegisterHandshakeServer(s, &server{})
-	log.Printf("server listening at %v", lis.Addr())
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
-	}
+    // create grpc server
+    s := grpc.NewServer()
+	goChittyChat.RegisterChatServiceServer(s, &server{})
+	log.Printf("Server listening at %v", lis.Addr())
+
+    // launch server
+    if err := s.Serve(lis); err != nil {
+        log.Fatalf("ERROR: Failed to serve: %v", err)
+    }
 }

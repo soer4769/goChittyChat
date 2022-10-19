@@ -2,74 +2,84 @@ package main
 
 import (
     "context"
+    "io"
     "log"
-    "time"
-    "math/rand"
-	"google.golang.org/grpc/credentials/insecure"
+    "os"
+    "bufio"
+    "fmt"
 
-	"github.com/gonetwork/proto"
-	"google.golang.org/grpc"
+    "github.com/gochittychat/proto"
+    "google.golang.org/grpc"
 )
 
-type Flags struct {
-    SYN, ACK, FIN bool
+var client goChittyChat.ChatServiceClient
+var usrId int32 = -1
+
+func inPost(done chan bool, inStream goChittyChat.ChatService_ConnectClient) {
+    for {
+        resp, err := inStream.Recv()
+        if err == io.EOF {
+            done <- true
+            return
+        }
+
+        if err != nil {
+            log.Fatalf("cannot receive %v", err)
+        }
+
+        if usrId < 0 {
+            usrId = resp.Id
+            continue
+        }
+
+        log.Println(resp.Message)
+    }
 }
 
-type Pack struct {
-    SeqNum, AckNum uint32
-    Message string
-    Status Flags
-}
+func outPost(done chan bool, outStream goChittyChat.ChatService_MessagesClient) {
+    scanner := bufio.NewScanner(os.Stdin)
+    for scanner.Scan() {
+        usrIn := goChittyChat.Post{Id: usrId, Message: scanner.Text()}
+        outStream.Send(&usrIn)
 
-func SendMessage(c TCPHandshake.HandshakeClient, p Pack) (*TCPHandshake.TCPPack, error) {
-    r, err := c.ConnSend(context.Background(), &TCPHandshake.TCPPack{
-        SeqNum: p.SeqNum,
-        AckNum: p.AckNum,
-        Message: p.Message,
-        Status: &TCPHandshake.Flags{
-            SYN: p.Status.SYN,
-            ACK: p.Status.ACK,
-            FIN: p.Status.FIN,
-        },
-    })
-
-    if err != nil {
-        log.Fatalf("could not handshake: %v", err)
+        if usrIn.Message == "exit" {
+            client.Disconnect(context.Background(), &usrIn)
+            return
+        }
     }
 
-    return r, err
-}
-
-func Shake(c TCPHandshake.HandshakeClient) {
-    log.Printf("Establishing Simulated TCP connection with server...")
-
-    syn := Pack{SeqNum: rand.Uint32(), Message: "SYN", Status: Flags{SYN: true}}
-    log.Printf("Sending message to server:\n\t%+v\n", syn)
-
-    r, err := SendMessage(c,syn)
-    if err != nil { return }
-    log.Printf("Recieved message from server:\n\t%+v\n", r)
-
-    ack := Pack{AckNum: r.SeqNum+1, Message: "ACK", Status: Flags{ACK: true}}
-    log.Printf("sending message to server:\n\t%+v\n", ack)
-
-    r, err = SendMessage(c,ack)
-    if err != nil { return }
-
-    log.Printf("Simulated TCP handshake successfully connected...")
+    if err := scanner.Err(); err != nil {
+       log.Printf("ERROR: Failed to scan input: %v", err)
+    }
 }
 
 func main() {
-    rand.Seed(time.Now().UnixNano())
-    conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+    // dial server
+    conn, err := grpc.Dial("localhost:50005", grpc.WithInsecure())
+    log.Printf("Client connecting to server...")
     if err != nil {
         log.Fatalf("did not connect: %v", err)
     }
-    c := TCPHandshake.NewHandshakeClient(conn)
 
-	Shake(c)
-	err = conn.Close()
-	if err != nil {
-		return
-	}
+    // setup stream
+    client = goChittyChat.NewChatServiceClient(conn)
+    inStream, inErr := client.Connect(context.Background(), &goChittyChat.ConPost{Username: "test", Lobby: ""})
+    outStream, outErr := client.Messages(context.Background())
+    if inErr != nil && outErr != nil {
+        log.Fatalf("open stream error: %v; %v", inErr, outErr)
+    }
+    log.Println("Client connected successfully...")
+    fmt.Println("-------------------------")
+
+    // running goroutines streams
+    done := make(chan bool)
+    go inPost(done, inStream)
+    go outPost(done, outStream)
+    <-done
+
+    // closes server connection
+    fmt.Println("-------------------------")
+    log.Printf("Closing server connection...")
+    conn.Close()
+    log.Printf("server connection ended...")
 }
