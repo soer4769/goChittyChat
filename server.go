@@ -40,6 +40,7 @@ func (s *server) Connect(in *goChittyChat.Post, srv goChittyChat.ChatService_Con
     s.Broadcast(&goChittyChat.Post{Id: userData.id, Lamport: in.Lamport, Message: userMsg})
     srv.Send(&goChittyChat.Post{Id: userData.id, Lamport: in.Lamport, Message: userMsg})
     srv.Send(&goChittyChat.Post{Message: "================================\n                        Welcome to Chitty Chat!\n                   \n                     Commands:\n                     --help            Display Help\n                     --exit            Leave Server\n                     --change-lobby X  Change Lobby\n                    ================================"})
+    log.Printf("Client %v connected to the server...", userData.id)
 
     for {
         select {
@@ -91,6 +92,7 @@ func (s *server) Messages(srv goChittyChat.ChatService_MessagesServer) error {
             s.Broadcast(&goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("Participant %v changed lobby to %v", resp.Id, resp.Message[15:])})
             usr.lobby = resp.Message[15:]
             s.Broadcast(&goChittyChat.Post{Id: resp.Id, Message: fmt.Sprintf("Participant %v joined the lobby...", resp.Id)})
+            usr.chanCom <-goChittyChat.Post{Id: usr.id, Message: fmt.Sprintf("Changed lobby to '%v'", usr.lobby)}
             continue
         }
 

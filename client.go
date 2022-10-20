@@ -49,8 +49,14 @@ func inPost(done chan bool, inStream goChittyChat.ChatService_ConnectClient) {
 func outPost(done chan bool, outStream goChittyChat.ChatService_MessagesClient) {
     scanner := bufio.NewScanner(os.Stdin)
     for scanner.Scan() {
+        textIn := scanner.Text()
+        if len(textIn) > 128 {
+            log.Println("Failed to send message: more than 128 characters")
+            continue
+        }
+
         lamportTime++
-        usrIn := goChittyChat.Post{Id: usrId, Message: scanner.Text(), Lamport: lamportTime}
+        usrIn := goChittyChat.Post{Id: usrId, Message: textIn, Lamport: lamportTime}
         outStream.Send(&usrIn)
 
         if usrIn.Message == "--exit" {
@@ -67,9 +73,9 @@ func outPost(done chan bool, outStream goChittyChat.ChatService_MessagesClient) 
 func main() {
     // dial server
     conn, err := grpc.Dial("localhost:50005", grpc.WithInsecure())
-    log.Printf("Participant connecting to server...")
+    log.Printf("Client connecting to server...")
     if err != nil {
-        log.Fatalf("failed to connect: %v", err)
+        log.Fatalf("Failed to connect: %v", err)
     }
     client = goChittyChat.NewChatServiceClient(conn)
 
@@ -82,7 +88,7 @@ func main() {
     if outErr != nil {
         log.Fatalf("Failed to open message stream: %v", outErr)
     }
-    log.Println("Participant connected successfully...")
+    log.Println("Client connected successfully...")
 
     // running goroutines streams
     done := make(chan bool)
@@ -93,5 +99,5 @@ func main() {
     // closes server connection
     log.Printf("Closing server connection...")
     conn.Close()
-    log.Printf("server connection ended...")
+    log.Printf("Server connection ended...")
 }
