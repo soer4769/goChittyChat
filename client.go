@@ -50,23 +50,23 @@ func inPost(done chan bool, inStream goChittyChat.ChatService_ConnectClient) {
 func outPost(outStream goChittyChat.ChatService_MessagesClient) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		textIn := scanner.Text()
-		if len(textIn) > 128 {
+		message := scanner.Text()
+		if len(message) > 128 {
 			log.Println("Failed to send message: more than 128 characters")
 			continue
 		}
 
 		lamportTime++
-		usrIn := goChittyChat.Post{Id: usrId, Message: textIn, Lamport: lamportTime}
+		messagePost := goChittyChat.Post{Id: usrId, Message: message, Lamport: lamportTime}
 
-		err := outStream.Send(&usrIn)
+		err := outStream.Send(&messagePost)
 		if err != nil {
 			return
 		}
 
-		if usrIn.Message == "--exit" {
+		if messagePost.Message == "--exit" {
 
-			_, err := client.Disconnect(context.Background(), &usrIn)
+			_, err := client.Disconnect(context.Background(), &messagePost)
 			if err != nil {
 				return
 			}
